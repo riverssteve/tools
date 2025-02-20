@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- Previous head and styles remain the same -->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nest OAuth Helper</title>
+    <style>
+        /* Previous styles remain the same */
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            background-color: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4285f4;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #357abd;
+        }
+        .result {
+            background-color: #fff;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 20px;
+            word-break: break-all;
+        }
+        .steps {
+            margin-bottom: 20px;
+        }
+        .step {
+            opacity: 0.5;
+        }
+        .step.active {
+            opacity: 1;
+            font-weight: bold;
+        }
+        .debug {
+            font-family: monospace;
+            background: #f0f0f0;
+            padding: 10px;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Nest OAuth Helper</h1>
+    
+    <div class="steps">
+        <div id="step1" class="step">Step 1: Nest Account Authorization</div>
+        <div id="step2" class="step active">Step 2: OAuth Token Generation</div>
+    </div>
+
+    <div class="container">
+        <div class="input-group">
+            <label for="projectId">Project ID:</label>
+            <input type="text" id="projectId" placeholder="Enter your Google Cloud Project ID">
+        </div>
+
+        <div class="input-group">
+            <label for="clientId">Client ID:</label>
+            <input type="text" id="clientId" placeholder="Enter your Google Client ID">
+        </div>
+        
+        <div class="input-group">
+            <label for="clientSecret">Client Secret:</label>
+            <input type="text" id="clientSecret" placeholder="Enter your Google Client Secret">
+        </div>
+
+        <div class="input-group">
+            <label for="callbackUrl">Callback URL:</label>
+            <input type="text" id="callbackUrl" placeholder="Enter callback URL" value="http://127.0.0.1:5000">
+        </div>
+        
+        <button onclick="startNestAuth()">1. Authorize Nest Account</button>
+        <button onclick="startOAuth()">2. Generate Tokens</button>
+    </div>
+
+    <div id="tokenInfo" class="result" style="display: none;">
+        <h3>OAuth Results:</h3>
+        <p><strong>Refresh Token:</strong> <span id="refreshToken"></span></p>
+        <p><strong>Access Token:</strong> <span id="accessToken"></span></p>
+    </div>
+
+    <div id="debug" class="debug"></div>
+
+    <script>
+        const SCOPES = [
+            'https://www.googleapis.com/auth/sdm.service',
+            'https://www.googleapis.com/auth/pubsub'
+        ];
+
+        const FORM_FIELDS = ['projectId', 'clientId', 'clientSecret', 'callbackUrl'];
+        const STORAGE_KEY = 'nestOAuthForm';
+        const EXPIRY_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
+
+        const storage = {
+            set: function(data) {
+                const item = {
+                    data: data,
+                    timestamp: new Date().getTime()
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(item));
+            },
+
+            get: function() {
+                const item = localStorage.getItem(STORAGE_KEY);
+                if (!item) {
+                    console.log('No stored data found');
+                    return null;
+                }
+
+                const parsedItem = JSON.parse(item);
+                const now = new Date().getTime();
+
+                if (now - parsedItem.timestamp > EXPIRY_TIME) {
+                    console.log('Stored data has expired');
+                    localStorage.removeItem(STORAGE_KEY);
+                    return null;
+                }
+
+                console.log('Retrieved stored data:', parsedItem.data);
+                return parsedItem.data;
+            },
+
+            clear: function() {
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        };
+
+        function getInputValue(id) {
+            const value = document.getElementById(id).value.trim();
+            console.log(`Getting value for ${id}:`, value);
+            return value;
+        }
+
+        function setInputValue(id, value) {
+            console.log(`Setting value for ${id}:`, value);
+            document.getElementById(id).value = value;
+        }
+
+        function saveFormData() {
+            const formData = {};
+            FORM_FIELDS.forEach(field => {
+                formData[field] = getInputValue(field);
+            });
+            console.log('Saving form data:', formData);
+            storage.set(formData);
+        }
+
+        function restoreFormData() {
+            const formData = storage.get();
+            console.log('Restoring form data:', formData);
+            
+            if (formData) {
+                FORM_FIELDS.forEach(field => {
+                    if (formData[field]) {
+                        setInputValue(field, formData[field]);
+                    }
+                });
+                return true;
+            }
+            return false;
+        }
+
+        // Initialize form fields and event listeners
+        function initializeForm() {
+            console.log('Initializing form...');
+            
+            // First restore any saved data
+            const restored = restoreFormData();
+            console.log('Form data restored:', restored);
+
+            // Then set up event listeners
+            FORM_FIELDS.forEach(field => {
+                const element = document.getElementById(field);
+                element.addEventListener('input', saveFormData);
+            });
+        }
+
+        function startNestAuth() {
+            const projectId = getInputValue('projectId');
+            const clientId = getInputValue('clientId');
+            const callbackUrl = getInputValue('callbackUrl');
+
+            if (!projectId || !clientId) {
+                alert('Please enter both Project ID and Client ID');
+                return;
+            }
+
+            saveFormData();
+
+            const nestAuthUrl = new URL(`https://nestservices.google.com/partnerconnections/${encodeURIComponent(projectId)}/auth`);
+            
+            nestAuthUrl.searchParams.append('redirect_uri', callbackUrl);
+            nestAuthUrl.searchParams.append('access_type', 'offline');
+            nestAuthUrl.searchParams.append('prompt', 'consent');
+            nestAuthUrl.searchParams.append('client_id', clientId);
+            nestAuthUrl.searchParams.append('response_type', 'code');
+            nestAuthUrl.searchParams.append('scope', SCOPES.join(' '));
+
+            window.location.href = nestAuthUrl.toString();
+        }
+
+        function startOAuth() {
+            document.getElementById('step1').classList.remove('active');
+            document.getElementById('step2').classList.add('active');
+
+            const clientId = getInputValue('clientId');
+            const callbackUrl = getInputValue('callbackUrl');
+
+            if (!clientId) {
+                alert('Please enter your Client ID');
+                return;
+            }
+
+            saveFormData();
+
+            const state = Math.random().toString(36).substring(7);
+            localStorage.setItem('oauth_state', state);
+
+            const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+            
+            authUrl.searchParams.append('client_id', clientId);
+            authUrl.searchParams.append('redirect_uri', callbackUrl);
+            authUrl.searchParams.append('response_type', 'code');
+            authUrl.searchParams.append('scope', SCOPES.join(' '));
+            authUrl.searchParams.append('access_type', 'offline');
+            authUrl.searchParams.append('state', state);
+            authUrl.searchParams.append('prompt', 'consent');
+
+            window.location.href = authUrl.toString();
+        }
+
+        async function exchangeCodeForTokens(code, clientId, clientSecret, callbackUrl) {
+            console.log('Exchanging code for tokens with:', { code, clientId, clientSecret, callbackUrl });
+            
+            try {
+                const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        code,
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        redirect_uri: callbackUrl,
+                        grant_type: 'authorization_code',
+                    }),
+                });
+
+                const tokenData = await tokenResponse.json();
+
+                if (tokenData.error) {
+                    throw new Error(tokenData.error_description || tokenData.error);
+                }
+
+                console.log('Token exchange successful');
+                return tokenData;
+            } catch (error) {
+                console.error('Token exchange failed:', error);
+                throw error;
+            }
+        }
+
+        async function handleCallback() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const error = urlParams.get('error');
+
+            console.log('Handling callback:', { code, error });
+
+            if (error) {
+                alert(`OAuth error: ${error}`);
+                return;
+            }
+
+            if (!code) {
+                return; // Not a callback
+            }
+
+            // Get current form values after ensuring form is initialized
+            const clientId = getInputValue('clientId');
+            const clientSecret = getInputValue('clientSecret');
+            const callbackUrl = getInputValue('callbackUrl');
+
+            if (!clientId || !clientSecret) {
+                alert('Missing required credentials. Please enter all required fields.');
+                return;
+            }
+
+            try {
+                const tokenData = await exchangeCodeForTokens(code, clientId, clientSecret, callbackUrl);
+
+                document.getElementById('tokenInfo').style.display = 'block';
+                document.getElementById('refreshToken').textContent = tokenData.refresh_token || 'No refresh token received';
+                document.getElementById('accessToken').textContent = tokenData.access_token;
+
+                storage.clear();
+
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+            } catch (error) {
+                alert(`Error exchanging code for tokens: ${error.message}`);
+            }
+        }
+
+        window.onload = async function() {
+            console.log('Page loaded');
+            
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            
+            if (code) {
+                console.log('Code parameter detected');
+                document.getElementById('step1').classList.remove('active');
+                document.getElementById('step2').classList.add('active');
+            }
+
+            // Initialize form first
+            initializeForm();
+            
+            // Then handle any callback
+            if (code) {
+                await handleCallback();
+            }
+        };
+    </script>
+</body>
+</html>
